@@ -2,21 +2,25 @@
 pragma solidity ^0.8.13;
 
 contract LastPixel {
-    uint public timeBank;
-    uint public colorBank;
+    uint256 public timeBank;
+    uint256 public colorBank;
     int8[10][10] public colorByCell;
     address public lastPainter;
-    uint public lastPaintTime;
+    uint256 public lastPaintTime;
     address[10][10] painterByCell;
-    uint lastFee = 0.01 ether;
+    uint256 lastFee = 0.01 ether;
     bool init = false;
+    mapping(address => uint256) public cellsPaintedBy;
+
+    uint256 paintBlockedUntil = 0;
+    uint256 colorBankSplitRewardLastCall = 0;
 
     function calcNewFee() private {
-        uint newFee = (lastFee * 103) / 100;
+        uint256 newFee = (lastFee * 103) / 100;
         lastFee = newFee;
     }
 
-    function getFee() public view returns (uint) {
+    function getFee() public view returns (uint256) {
         return lastFee;
     }
 
@@ -26,14 +30,31 @@ contract LastPixel {
         return painterByCell[x][y];
     }
 
-    function paint(uint8 x, uint8 y, int8 color) public payable {
-        uint fee = lastFee;
+    function paint(
+        uint8 x,
+        uint8 y,
+        int8 color
+    ) public payable {
+        uint256 fee = lastFee;
         require(msg.value >= fee, "give me money");
         require(x < 10, "x out of bounds");
         require(y < 10, "y out of bounds");
         require(0 <= color && color <= 7, "color must be in range [0, 7]");
+        require(
+            block.timestamp > paintBlockedUntil,
+            "painting is blocked by color bank grab"
+        );
 
         init = true;
+
+        // Util for color bank rewards
+        address oldPainter = painterByCell[x][y];
+        if (oldPainter != address(0)) {
+            if (cellsPaintedBy[oldPainter] > 0) {
+                cellsPaintedBy[oldPainter] -= 1;
+            }
+        }
+        cellsPaintedBy[msg.sender] += 1;
 
         colorByCell[x][y] = color;
         painterByCell[x][y] = msg.sender;
@@ -47,14 +68,17 @@ contract LastPixel {
     function grabTimeBank() public payable {
         require(init, "game not initialized");
         require(block.timestamp > lastPaintTime, "check for time warp failed");
-        require(block.timestamp - lastPaintTime > 10 minutes, "10 minute delay not finished");
+        require(
+            block.timestamp - lastPaintTime > 10 minutes,
+            "10 minute delay not finished"
+        );
         require(msg.sender == lastPainter, "you are not the last painter");
 
         payable(msg.sender).transfer(timeBank);
         timeBank = 0;
     }
 
-    function fieldPaintedInOneColor() private view returns (bool) {
+    function fieldPaintedInOneColor() public view returns (bool) {
         int8 color = colorByCell[0][0];
         for (uint8 i = 0; i < 10; i++) {
             for (uint8 j = 0; j < 10; j++) {
@@ -66,22 +90,32 @@ contract LastPixel {
         return true;
     }
 
-    function grabColorBank() public payable {
+    function triggerColorBankSplit() public {
+        require(init, "game not initialized");
+        require(
+            fieldPaintedInOneColor(),
+            "not all cells are painted with one color"
+        );
+        colorBankSplitRewardLastCall = block.timestamp + 5 minutes;
+        paintBlockedUntil = block.timestamp + 5 minutes;
+    }
+
+    function colorBankSplitActive() private view returns (bool) {
+        return block.timestamp <= colorBankSplitRewardLastCall;
+    }
+
+    function grabColorBankReward() public payable {
         require(init, "game not initialized");
         require(colorBank > 0, "color bank is drained");
-        require(fieldPaintedInOneColor(), "not all cells are painted with one color");
+        require(
+            colorBankSplitActive(),
+            "color bank split is not active, consider calling 'triggerColorBankSplit'"
+        );
+        uint256 cellsPaintedBySender = cellsPaintedBy[msg.sender];
+        require(cellsPaintedBySender > 0, "you have 0 reward");
 
-        uint cellsPaintedBySender = 0;
-        for (uint8 i = 0; i < 10; i++) {
-            for (uint8 j = 0; j < 10; j++) {
-                if (painterByCell[i][j] == msg.sender) {
-                    cellsPaintedBySender += 1;
-                    painterByCell[i][j] = address(0);
-                }
-            }
-        }
-
-        uint reward = (colorBank * cellsPaintedBySender) / 100;
+        cellsPaintedBy[msg.sender] = 0;
+        uint256 reward = (colorBank * cellsPaintedBySender) / 100;
         payable(msg.sender).transfer(reward);
         colorBank -= reward;
     }
