@@ -6,12 +6,12 @@ contract LastPixel {
     uint256 public colorBank;
     int8[10][10] public colorByCell;
     address public lastPainter;
-    uint256 public lastPaintTime;
     address[10][10] painterByCell;
     uint256 lastFee = 0.01 ether;
     bool init = false;
-    mapping(address => uint256) public cellsPaintedBy;
+    mapping(address => int256) public cellsPaintedBy;
 
+    uint256 public lastPaintTime;
     uint256 paintBlockedUntil = 0;
     uint256 colorBankSplitRewardLastCall = 0;
 
@@ -74,8 +74,11 @@ contract LastPixel {
         );
         require(msg.sender == lastPainter, "you are not the last painter");
 
-        payable(msg.sender).transfer(timeBank);
+        uint256 amount = timeBank;
         timeBank = 0;
+
+        (bool success, ) = msg.sender.call{value: amount}("");
+        require(success, "transfer failed");
     }
 
     function fieldPaintedInOneColor() public view returns (bool) {
@@ -96,6 +99,8 @@ contract LastPixel {
             fieldPaintedInOneColor(),
             "not all cells are painted with one color"
         );
+        require(cellsPaintedBy[msg.sender] > 0, "must be a participant");
+
         colorBankSplitRewardLastCall = block.timestamp + 5 minutes;
         paintBlockedUntil = block.timestamp + 5 minutes;
     }
@@ -111,12 +116,15 @@ contract LastPixel {
             colorBankSplitActive(),
             "color bank split is not active, consider calling 'triggerColorBankSplit'"
         );
-        uint256 cellsPaintedBySender = cellsPaintedBy[msg.sender];
+        int256 cellsPaintedBySender = cellsPaintedBy[msg.sender];
         require(cellsPaintedBySender > 0, "you have 0 reward");
+        require(cellsPaintedBySender <= 100, "impossible");
 
         cellsPaintedBy[msg.sender] = 0;
-        uint256 reward = (colorBank * cellsPaintedBySender) / 100;
-        payable(msg.sender).transfer(reward);
+        uint256 reward = (colorBank * uint256(cellsPaintedBySender)) / 100;
         colorBank -= reward;
+
+        (bool success, ) = msg.sender.call{value: reward}("");
+        require(success, "transfer failed");
     }
 }
